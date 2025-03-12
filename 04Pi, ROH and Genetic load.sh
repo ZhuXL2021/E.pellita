@@ -1,22 +1,39 @@
 #Pi
-vcftools --gzvcf 1286304SNP.vcf.gz  --keep ind.txt --window-pi 10000  --out ind.pi
+#filter
+vcftools --gzvcf hard.vcf.gz --max-maf 0 --minQ 30 --max-missing 0.8 --min-meanDP 10 --max-meanDP 100 --recode --stdout | bgzip -c > invariant.vcf.gz 
+vcftools --gzvcf hard.vcf.gz --mac 1 --min-alleles 2 --max-alleles 2 --minQ 30 --max-missing 0.8 --min-meanDP 10 --max-meanDP 100 --recode --stdout | bgzip -c > variant.vcf.gz  
+tabix invariant.vcf.gz
+tabix variant.vcf.gz
+bcftools concat --allow-overlaps variant.vcf.gz invariant.vcf.gz -O z -o allsites.vcf.gz 
+#PIXY
+pixy --stats pi --vcf allsites.vcf.gz --populations 28Pop.list --window_size 10000 --n_cores 20 --output_prefix 28Pop 
+cat 28Pop_pi.txt |cut -f1 |sort|uniq >pop.list 
+#stats
+cat pop.list | while read line
+do
+    a=$(echo $line | awk '{print $1}');
+    cat 28Pop_pi.txt |awk '$1 == "'$a'" {suma+=$7;sumb+=$8} END {print "'$a'", suma, sumb, suma/sumb}' >> 28Pop.pi_average.txt
+done
 
 #ROH
-plink --allow-extra-chr --vcf 1286304SNP.vcf.gz --homozyg --homozyg-window-het 0 --homozyg-snp 50 --homozyg-kb 10 --homozyg-density 5000 --homozyg-gap 5000 --out ROHoutput
+plink --allow-extra-chr --vcf 1286304SNP.vcf.gz --homozyg --homozyg-window-het 0 --homozyg-snp 50 --homozyg-kb 10 \
+--homozyg-density 5000 --homozyg-gap 5000 --out ROHoutput
 
 #genetic load
 #building database
 java -jar -Xmx24g snpEff.jar build -c snpEff.config -gff3 -v CPA -d -noCheckCds -noCheckProtein
 #ancestral states
-vcftools --gzvcf 1286304SNP.vcf.gz  --hardy  --out ./Pop/population 
-awk -F'\t' 'NR>1 && $3 ~ /^([0-9]+\/)+([0-9]+)$/ {split($3, arr, "/"); if(arr[1]>148) print $1"\t"$2}' ./Pop/population.hwe > ./RefAnc/population.homo.Ref.Anc.pos 
-awk -F'\t' 'NR>1 && $3 ~ /^[0-9]+\/[0-9]+\/([0-9]+)/ {split($3, arr, "/"); if(arr[3]>148) print $1"\t"$2}'  ./Pop/population.hwe > ./AltAnc/population.homo.Alt.Anc.pos 
+vcftools --gzvcf E.urophylla.pass.snps.vcf.gz --min-alleles 2 --max-alleles 2 --minQ 30 --min-meanDP 10 --max-meanDP 200 --recode --stdout | bgzip -c > OGind.vcf.gz
+mkdir -p RefAnc AltAnc OG 
+vcftools --gzvcf ./OGind.vcf.gz --counts --out ./OG/outgroup
+cat ./OG/outgroup.frq.count | awk -F"[:\t]" '{if($4 == $6 && $4 != 0 ) print $1"\t"$2 }' >> ./RefAnc/outgroup.homo.Ref.anc.pos
+cat ./OG/outgroup.frq.count | awk -F"[:\t]" '{if($4 == $8 && $4 != 0 ) print $1"\t"$2 }' >> ./AltAnc/outgroup.homo.Alt.anc.pos 
 #As Ref.anc for example
 mkdir -p ./Cout ./Pos ./IndVCF ./temp ./Output ./stat ./lof
 for n in `cat ind.list`; do
   echo $n
 done | xargs -n 1 -P 20 -I {} sh -c '
-   vcftools --gzvcf 1286304SNP.vcf.gz --indv {} --positions population.homo.Ref.Anc.pos --max-missing 1.0 --counts --out "./Cout/{}.Ref"
+   vcftools --gzvcf 1286304SNP.vcf.gz --indv {} --positions outgroup.homo.Ref.Anc.pos --max-missing 1.0 --counts --out "./Cout/{}.Ref"
    '
 for n in `cat ind.list`; do
    cat ./Cout/${n}.Ref.frq.count | awk -F "[\t/:]" '{if($8 == 2) print $1"\t"$2}' >>  ./Pos/${n}.Ref.homo.pos ###When the ancestor state is Alt, change $8 ==2 to $6==2
@@ -37,11 +54,6 @@ for n in `cat ind.list`; do
 ###input
    cat ./temp/${n}.Ref.homo.missense.vcf | grep -v '#' | awk -F"\t|\\\\|" '{printf ("%s\t%s\t%s\t%s\t%s\n", $18,$1,$2,$4,$5)}' |  awk -F"\t" '{OFS = FS} { gsub(/p\./,"", $1); print }' | awk '{sub(/[0-9]+/," ",$1); print}'  >> ./temp/${n}.Ref.homo.missense.input
    cat ./temp/${n}.Ref.hete.missense.vcf | grep -v '#' | awk -F"\t|\\\\|" '{printf ("%s\t%s\t%s\t%s\t%s\n", $18,$1,$2,$4,$5)}' |  awk -F"\t" '{OFS = FS} { gsub(/p\./,"", $1); print }' | awk '{sub(/[0-9]+/," ",$1); print}'  >> ./temp/${n}.Ref.hete.missense.input
-###LOF
-   cat ./IndVCF/${n}.Ref.homo.anc | java -jar -Xmx3g SnpSift.jar filter "LOF[*].PERC=1.00" >> ./lof/${n}.Ref.homo.LOF.vcf
-   cat ./IndVCF/${n}.Ref.hete.anc | java -jar -Xmx3g SnpSift.jar filter "LOF[*].PERC=1.00" >> ./lof/${n}.Ref.hete.LOF.vcf
-   awk '$1 !~ /^#/ { print $1, $2, $4, $5 }' ./lof/${n}.Ref.homo.LOF.vcf > ./lof/${n}.Ref.homo.LOF
-   awk '$1 !~ /^#/ { print $1, $2, $4, $5 }' ./lof/${n}.Ref.hete.LOF.vcf > ./lof/${n}.Ref.hete.LOF
    done
 ###DEL  
 for n in `cat ind.list`; do   
