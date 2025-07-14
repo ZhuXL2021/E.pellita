@@ -19,4 +19,3 @@ done
 #ROH
 plink --allow-extra-chr --vcf CPA_LD.vcf.gz --homozyg --homozyg-window-het 0 --homozyg-snp 50 --homozyg-kb 10 \
 --homozyg-density 5000 --homozyg-gap 5000 --out ROHoutput
-
